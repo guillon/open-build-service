@@ -53,7 +53,7 @@ my $buildroot;
 my $port;
 my $statedir;
 my $hostarch;
-my $vm = '';
+my $vmtype = 'none';
 my $vm_root = '';
 my $vm_swap = '';
 my $vm_kernel;
@@ -175,6 +175,9 @@ Usage: $0 [OPTION] --root <directory> --statedir <directory>
                      currently supported architectures: 
                      @{[sort keys %cando]}
 
+       --vm-type <vm>
+                   : one of xen|kvm|lxc|chroot|none
+
        --kvm       : enable kvm
 
        --xen       : enable xen
@@ -200,7 +203,7 @@ Usage: $0 [OPTION] --root <directory> --statedir <directory>
 
        --test      : enable test mode
 
-       --build     : just build the package, don't send anything back
+       --build     : just build the package, don\'t send anything back
                      (needs a buildinfo file as argument)
 
        --noworkerupdate
@@ -280,13 +283,22 @@ while (@ARGV) {
     $testmode = 1;
     next;
   }
+  if ($ARGV[0] eq '--vm-type') {
+    shift @ARGV;
+    $vmtype = shift @ARGV;
+    if ($vmtype !~ /^xen|kvm|lxc|chroot|none$/) {
+	print "error: unsupported vmtype in option: --vmtype $vmtype";
+	usage(1);
+    }
+    next;
+  }
   if ($ARGV[0] eq '--kvm') {
-    $vm = ' --kvm';
+    $vmtype = 'kvm';
     shift @ARGV;
     next;
   }
   if ($ARGV[0] eq '--xen') {
-    $vm = ' --xen';
+    $vmtype = 'xen';
     shift @ARGV;
     next;
   }
@@ -1417,12 +1429,12 @@ sub dobuild {
   }
 
   push @args, "$statedir/build/build";
-  if ($vm) {
+  if ($vmtype =~ /^xen|kvm$/) {
     # add a bit delay - not all workers should start at the same time after idle.
     sleep (int(rand(5)) + 1); 
     mkdir("$buildroot/.mount") unless -d "$buildroot/.mount";
     push @args, '--root', "$buildroot/.mount";
-    push @args, $vm, "$vm_root";
+    push @args, '--vm-type', $vmtype, "$vm_root";
     push @args, '--swap', "$vm_swap";
     my $vmmemory = readstr("$buildroot/memory", 1);
     $vmmemory = $vm_memory if $vm_memory;
@@ -1434,6 +1446,9 @@ sub dobuild {
     push @args, '--vmdisk-filesystem', $vmdisk_filesystem if $vmdisk_filesystem;
   } else {
     push @args, '--root', $buildroot;
+    if ($vmtype ne 'none') {
+	push @args, '--vm-type', $vmtype;
+    }
   }
   push @args, '--clean';
   push @args, '--changelog';
@@ -1473,7 +1488,7 @@ sub dobuild {
     return 1;
   }
 
-  if ($vm) {
+  if ($vmtype =~ /^xen|kvm$/) {
     rm_rf("$buildroot/.build.packages");
     if (! -d "$buildroot/.mount/.build.packages") {
       # old style, call extractbuild
@@ -1578,7 +1593,7 @@ while (!BSServer::server($conf)) {
       $rekillcnt = 0;
       $state = lockstate();
       if ($state->{'state'} eq 'killed' || $state->{'state'} eq 'discarded') {
-        if (system("$statedir/build/build", "--root", $buildroot, ($vm ? ($vm, "$vm_root") : ()), "--kill")) {
+        if (system("$statedir/build/build", "--root", $buildroot, ($vmtype =~ /^xen|kvm$/ ? ("--vm-type", $vmtype, "$vm_root") : ()), "--kill")) {
 	  warn("could not kill job\n");
         }
       }
@@ -1599,7 +1614,7 @@ while (!BSServer::server($conf)) {
     next unless @s;
     if ($s[7] > $buildlog_maxsize) {
       next unless $locked;
-      if (system("$statedir/build/build", "--root", $buildroot, ($vm ? ($vm, "$vm_root") : ()), "--kill")) {
+      if (system("$statedir/build/build", "--root", $buildroot, ($vmtype =~ /^xen|kvm$/ ? ("--vm-type", $vmtype, "$vm_root") : ()), "--kill")) {
 	warn("could not kill job\n");
         last;
       }
@@ -1609,7 +1624,7 @@ while (!BSServer::server($conf)) {
       $locked = 0;
     } elsif ($ct - $s[9] > $buildlog_maxidle) {
       next unless $locked;
-      if (system("$statedir/build/build", "--root", $buildroot, ($vm ? ($vm, "$vm_root") : ()), "--kill")) {
+      if (system("$statedir/build/build", "--root", $buildroot, ($vmtype =~ /^xen|kvm$/ ? ("--vm-type", $vmtype, "$vm_root") : ()), "--kill")) {
 	warn("could not kill job\n");
         last;
       }
@@ -1662,7 +1677,7 @@ if ($path eq '/info') {
   my $state = lockstate();
   die("not building\n") if $state->{'state'} ne 'building';
   die("building a different job\n") if $cgi->{'jobid'} && $cgi->{'jobid'} ne $state->{'jobid'};
-  if (system("$statedir/build/build", "--root", $buildroot, ($vm ? ($vm, "$vm_root") : ()), "--kill")) {
+  if (system("$statedir/build/build", "--root", $buildroot, ($vmtype =~ /^xen|kvm$/ ? ("--vm-type", $vmtype, "$vm_root") : ()), "--kill")) {
     die("could not kill job\n");
   }
   local *F;
@@ -1689,7 +1704,7 @@ if ($path eq '/info') {
 }
 
 # Check for XEN daemon database leak
-if ($vm eq "--xen" && $xenstore_maxsize && 0 + (-s '/var/lib/xenstored/tdb') > $xenstore_maxsize) {
+if ($vmtype eq "xen" && $xenstore_maxsize && 0 + (-s '/var/lib/xenstored/tdb') > $xenstore_maxsize) {
   die("xenstore too big:".(-s '/var/lib/xenstored/tdb')."\n");
 }
 
